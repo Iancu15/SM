@@ -1,0 +1,100 @@
+serial.c
+
+Am creat intai varianta seriala dupa implementarea de la link-ul
+https://www.codesansar.com/numerical-methods/matrix-inverse-using-gauss-jordan-method-c-program.htm.
+Diferenta e ca in implementarea mea am preferat sa indexez de la 0 si augmentarea matricii
+identitate am facut-o mai eficienta folosind un singur for.
+
+Algoritmul augmenteaza matricea de identitate la matricea initiala si apoi aplica gauss
+jordan pe noua matrice. Rezultatul se va afla unde am augmentat matricea identitate,
+insa pentru a avea rezultatul corect rezultatul trebuie intai scalat (in jos) folosind
+matricea rezultata in partea stanga.
+
+utils.h
+
+Aici am pus toate functiile folosite in toate implementarile. In principal partea de I/O.
+E o functie read_input() ce citeste matricea pe care trebuie sa o inversam si dimensiunea
+acesteia. Mai am functii pentru dezalocarea matricii la final si printarea acesteia
+pentru debug. Functia display_solution() primeste matricea rezultat de dimensiune N x 2N
+si afiseaza matricea ce s-a obtinut in locul unde am augmentat matricea identitate. Mai
+am si o functie get_time() pentru a calcula real time-ul pentru fiecare implementare
+excluzand partea de I/O.
+
+create_input.py
+
+E un fisier python ce creeaza matricea noastra de intrare si o pune in fisierul input.
+Primeste dimensiunea N si creeaza matricea N x N folosind folosind valori random intre
+-100 si 100 (algoritmul ar trebui sa mearga si pe matrici cu valori negative). Creez
+matricea random pentru ca o matrice random are o probabilitate foarte mare (aproape de 1)
+de a fi inversabila. Cu cat dimensiunea matricii e mai mare, cu atat e mai probabil sa fie
+inversabila. Motivul e simplu si anume ca determinantul trebuie sa fie 0 sa fie
+neinversabila si acest lucru se intampla in foarte putine matrici generate aleator.
+
+openmp.c
+
+Sunt 3 for-uri pe nivele diferite ce trebuie paralelizate. Pe primul se poate pune un
+pragma for foarte usor, pe al doilea se poate pune pe for-ul interior k pentru ca
+in interiorul acestuia se modifica linia k ce tine de iteratie si se foloseste
+linia i (constanta) si linia k pentru calcule. Putem fi siguri ca niciun alt thread nu
+va modifica linia i cand calculam pentru ca avem conditia ca linia k sa fie diferita de i.
+In al 3-lea for putem paraleliza pe linii. Am pus #pragma omp parallel in exterior in
+loc sa pun #pragma omp parallel for la fiecare for paralelizat pentru a nu recrea thread-urile.
+
+pthreads.c
+
+Ma folosesc de calculate_start() si calculate_end() pentru a imparti for-ul in chunk-uri
+egale pentru fiecare thread (asemanator cu scheduling static in openmp), functiile le-am
+luat din temele in care le-am mai folosit la APD. Ideea e sa creez thread-urile si sa le
+dau o structura ce contine toate argumentele necesare si apoi sa astept la join sa isi
+termine treaba. Paralelizez aceleasi for-uri ca la openmp avand aceleasi considerente.
+Diferenta e ca la gauss jordan trebuie sa pun bariere intre iteratiile lui i pentru a
+nu fi modificata linia i cat timp nu a terminat toata lumea iteratia i. La openmp nu e
+necesara o bariera ca #pragma omp for pune el o bariera.
+
+mpi.c
+
+Am impartit procesele intre un root si mai multi workeri. Root-ul se ocupa de I/O, de
+oferirea de linii pentru procesare workerilor si de agregarea acestor rezultate. Workerii
+primesc linii de la root si trimit inapoi liniile modificate.
+
+Primul for lucreaza doar pe size elemente asa ca nu se renteaza sa trimit la workeri sa calculeze,
+se va face calcularea in root. Folosesc MPI_Bast() sa trimit size-ul unei linii de la root
+la workeri. Workerii au i_row si k_row ca linii in care sa isi stocheze liniile primite de la
+root. La gauss jordan se trimite intai linia i a curentei iteratii i catre workeri, din aceasta
+linie doar se va citi. Apoi se trimit liniile k in mod egal proceselor. Mesajul ce trimite linia
+k va avea tag-ul k. Workerii primesc si stocheaza linia in k_row, fac modificarile asupra ei si apoi
+o trimit inapoi la ROOT. Se calculeaza catre care worker merge linia k folosind formula
+k % (proc - 1) + 1, in functie de restul lui k la (proc - 1). Se adauga + 1 pentru ca
+root-ul are id-ul 0 si astfel ar trebui pentru restul 0 sa fie dat la worker-ul 1, restul 1 la 
+worker-ul 2 s.a.m.d.. Nu a mai fost nevoie de bariera aici ca la pthreads la final de iteratie
+i pentru ca workerii vor astepta in noua iteratia i sa primeasca i_row si asta se intampla cand
+termina root-ul iteratia i (primeste toate k-uri modificate). Scalarea liniilor s-a facut pe
+acelasi principiu, diferenta e ca linia i va avea tag-ul size + i pentru a se diferentia de
+mesajele de la gauss jordan.
+
+Nota: Am folosit pachetul mpi/openmpi-x86_64.
+
+mpi-openmp.c
+
+Si la mpi-openmp si la mpi-pthreads folosesc 2 thread-uri per proces si 3 procese in total(1 root, 2 workeri)
+pentru ca am doar 6 core-uri si mai multe thread-uri nu vor aduce beneficii majore (2 x 3 = 6 thread-uri).
+
+In root toate trimiterile de linii catre workeri si primirile rezultatelor de la acestia se poate face
+in paralel folosind un #pragma for. In openmp nu se trece mai departe pana nu isi termina toate thread-urile
+iteratiile for-ului respectiv, avand astfel un fel de bariera implicita. For-ul de augmentare care doar calcula
+poate fi usor paralelizat. In workeri linia i din care doar se citeste poate fi partajata, insa linia k
+pe care se modifica va fi alocata per thread. La gauss jordan un singur thread primeste i_row de la root,
+apoi se paralelizeaza for-ul in care se modifica liniile k, asemeni openmp-ului normal. La scalare paralelizez
+for-ul exterior.
+
+mpi-pthreads.c
+
+Root-ul si workerii isi vor creea thread-urilor si vor face join pe ele in functii diferite. Motivul este ca
+acestia folosesc argumente diferite si din acest motiv am si 2 structuri ThreadArgRoot si ThreadArgWorker.
+Paralelizarile se fac asemeantor cu cum le-am facut pentru mpi-openmp, diferenta e ca acum trebuie sa pun
+explicit bariera intre for-uri.
+
+corectitudine
+
+Am rulat implementarile pe matrice de 100 x 100. Pe aceasta rulare toate implementarile paralele au avut
+acelasi rezultat cu implementare seriala, motiv pentru care pot presupune ca trec testul de corectitudine.
